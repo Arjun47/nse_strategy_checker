@@ -13,25 +13,31 @@ import strategy
 # get , compute , draw.
 
 
-def test_run():
+def compare_results():
     startDate = datetime.date(2000, 1, 1)
     endDate = datetime.date(2022, 7, 1)
     # endDate = datetime.date.today()
     # df = fetcher.get_data_for_symbol('RELIANCE', 'RELIANCE.NS', startDate, endDate)
-    df = pd.read_csv("nse_data/rel.csv")
+    df = pd.read_csv("nse_data/hdfc.csv")
     print(df.tail(1))
 
-    # strategy.RSI(df)
-    # draw.strategy_results(df, title='RSI Strategy')
+    df = strategy.RSI(df)
+    draw.strategy_results(df, title='RSI Strategy')
 
-    # strategy.SMA_Crossover(df)
+    # df = strategy.sma_crossover(df, fast=21, slow=5)
     # draw.strategy_results(df)
 
-    strategy.Bollinger_Band(df)
-    draw.strategy_results(df)
+    # df = strategy.macd(df, fast=12, slow=26)
+    # draw.strategy_results(df)
 
-    draw.coloumn(df, title="Stance", columns=['Stance'])  # buy-sell signals for the strategy.
+    # df = strategy.ema_crossover(df)
+    # draw.strategy_results(df)
+
+    # df = strategy.Bollinger_Band(df)
+    # draw.strategy_results(df)
+
+    draw.coloumn(df, title="Stance", columns=['Stance', 'Date'])  # buy-sell signals for the strategy.
 
 
 if __name__ == "__main__":
-    test_run()
+    compare_results()

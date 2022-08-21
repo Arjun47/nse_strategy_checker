@@ -8,32 +8,54 @@ import compute
 # Create column Accumulated Close
 
 def SMA_Crossover(df, fast=42, slow=252):
-
     # create the moving average values and
     # simultaneously append them to new columns in our existing DataFrame.
-    df['42d'] = np.round(compute.running_average(df['Adj Close'], windowsize=42), 2)
-    df['252d'] = np.round(compute.running_average(df['Adj Close'], windowsize=252), 2)
+    df.dropna()
+    df['fast'] = np.round(compute.running_average(df['Adj Close'], windowsize=fast), 2)
+    df['slow'] = np.round(compute.running_average(df['Adj Close'], windowsize=slow), 2)
 
     # Generate stance: 0, -1, 1.
-    df['42-252'] = df['42d'] - df['252d']
+    df['fast-slow'] = df['fast'] - df['slow']
 
     offset = 0
-    #add condition to ensure first stance change is never -1.
-    df['Stance'] = np.where(df['42-252'] > offset, 1, 0) #42ma being offset amount above 252 value.
-    df['Stance'] = np.where(df['42-252'] < offset, -1, df['Stance'])  #offset amount below 252 value
+    # add condition to ensure first stance change is never -1.
+    df['Stance'] = np.where(df['fast-slow'] > offset, 1, 0)  # 42ma being offset amount above 252 value.
+    df['Stance'] = np.where(df['fast-slow'] < offset, -1, df['Stance'])  # offset amount below 252 value
     # print df['Stance'].value_counts()
+    df.dropna(inplace=True)
 
     # Generate accumulated closing price
-    compute.accumulated_close(df)  #instead of everything below:
+    compute.accumulated_close(df)  # instead of everything below:
 
     # df_ma['Market Returns'] = np.log(df_ma['Adj Close'] / df_ma['Adj Close'].shift(1))
     # df_ma['Strategy'] = df_ma['Market Returns'] * df_ma['Stance'].shift(1)
 
 
-def RSI(df, lowerCutoff=30, upperCutoff=70, period=14):
+def sma_crossover(df, fast=21, slow=9):
+    df['fast'] = compute.sma_indicator(df['Close'], window=fast)
+    df['slow'] = compute.sma_indicator(df['Close'], window=slow)
+    df['fast-slow'] = df['fast'] - df['slow']
 
-    df['RSI'] = pd.Series(compute.RSI(df['Adj Close'], period=period))
+    offset = 0
+    df['Stance'] = np.where(df['fast-slow'] > offset, 1, 0)
+    df['Stance'] = np.where(df['fast-slow'] < offset, -1, df['Stance'])
+    df.dropna(axis=0, how='any', inplace=True)
+    first_negative = True if df['Stance'].iloc[0] == -1 else False
+    for index, value in df['Stance'].iteritems():
+        if value < 0:
+            df['Stance'].at[index] = 0
+        else:
+            break
+
+    df = compute.accumulated_close(df)
+    return df
+
+
+def RSI(df, lowerCutoff=30, upperCutoff=70, period=14):
+    # rsi_calc = compute.RSI(df['Adj Close'], period=period)
+    # df['RSI'] = pd.Series(rsi_calc)
     df['Stance'] = 0
+    df['RSI'] = compute.ta_RSI(df['Adj Close'], period=period)
     offset = 0
     last_stance = 0
     upper_cutoff_set_once = False
@@ -45,13 +67,13 @@ def RSI(df, lowerCutoff=30, upperCutoff=70, period=14):
         elif upper_cutoff_set_once and row['RSI'] < lowerCutoff:
             last_stance = -1
 
-        df.set_value(index, 'Stance', last_stance)
+        df.at[index, 'Stance'] = last_stance
 
-    compute.accumulated_close(df)
+    df = compute.accumulated_close(df)
+    return df
 
 
 def Bollinger_Band(df):
-
     # 1. Compute rolling mean
     rolling_mean = compute.rolling_std_mean(df['Adj Close'], window=20)
 
@@ -59,6 +81,7 @@ def Bollinger_Band(df):
     rolling_std = compute.rolling_std(df['Adj Close'], window=20)
 
     # 3. Compute upper and lower bands
+    # upper_band, lower_band = compute.bollinger_bands(rolling_mean, rolling_std)
     upper_band, lower_band = compute.bollinger_bands(rolling_mean, rolling_std)
 
     df['Stance'] = 0
@@ -79,10 +102,44 @@ def Bollinger_Band(df):
         elif upper_cutoff_set_once and row['Adj Close'] < row['Lower Band']:
             last_stance = -1
 
-        df.at[index, 'Stance']= last_stance
+        df.at[index, 'Stance'] = last_stance
 
-    compute.accumulated_close(df)
+    df = compute.accumulated_close(df)
+    return df
 
 
-def MACD(df):
-    print('Pending.')
+def macd(df, fast=12, slow=26, signal=9):
+    macd_ = compute.MACD(df['Adj Close'], window_fast=fast, window_slow=slow, window_sign=signal)
+    df['macd_line'] = macd_.macd()
+    df['macd_signal'] = macd_.macd_signal()
+
+    df['Stance'] = 0
+    last_instance = 0
+    for index, row in df.iterrows():
+        if row['macd_signal'] > row['macd_line']:
+            last_instance = 1
+        elif row['macd_signal'] < row['macd_line']:
+            last_instance = -1
+
+        df.at[index, 'Stance'] = last_instance
+
+    df = compute.accumulated_close(df)
+    return df
+
+
+def ema_crossover(df, fast=9, slow=26):
+    df[f'ema_{fast}'] = compute.EMAIndicator(df['Adj Close'], window=fast).ema_indicator()
+    df[f'ema_{slow}'] = compute.EMAIndicator(df['Adj Close'], window=slow).ema_indicator()
+
+    df['Stance'] = 0
+    last_instance = 0
+    for index, row in df.iterrows():
+        if row[f'ema_{fast}'] > row[f'ema_{slow}']:
+            last_instance = 1
+        elif row[f'ema_{fast}'] < row[f'ema_{slow}']:
+            last_instance = -1
+
+        df.at[index, 'Stance'] = last_instance
+
+    df = compute.accumulated_close(df)
+    return df

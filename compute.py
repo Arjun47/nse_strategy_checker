@@ -1,6 +1,9 @@
 import pandas as pd
 import datetime
 import numpy as np
+from ta.momentum import rsi
+from ta.volatility import BollingerBands
+from ta.trend import sma_indicator, MACD, EMAIndicator
 
 #https://github.com/nlsdfnbch/pandas-technical-indicators/blob/master/technical_indicators.py
 
@@ -13,6 +16,41 @@ def daily_returns(df):
     print(daily_return.head())
     daily_return.ix[0, :] = 0
     return daily_return
+
+
+class Trade:
+
+    def __init__(self, buy=None, sell=None):
+        self.active = None
+        self._buy = buy
+        self._sell = sell
+
+    @property
+    def buy(self):
+        return self._buy
+
+    @buy.setter
+    def buy(self,value):
+        self._buy = value
+        self.active = True
+
+    @property
+    def sell(self):
+        return self._sell
+
+    @sell.setter
+    def sell(self, value):
+        self._sell = value
+
+    def get_pnl(self):
+        if self.buy and self.sell:
+            return self.sell-self.buy
+        return 0
+
+    def close_trade(self):
+        self.active = False
+        self._buy = None
+        self._sell = None
 
 
 def normalize(df, column='Adj Close'):
@@ -48,6 +86,11 @@ def bollinger_bands(rm, rstd):
     lower_band = rm - rstd * 2  # pd.rolling_std(values, window=window)
     return upper_band, lower_band
 
+def ta_bollinger_bands(close, period=20):
+    indicator_bb = BollingerBands(close=close, window=period, window_dev=2)
+    upper_band = indicator_bb.bollinger_hband()
+    lower_band = indicator_bb.bollinger_lband()
+    return upper_band, lower_band
 
 def RSI(series, period):
     # print series.size
@@ -62,23 +105,26 @@ def RSI(series, period):
     u = u.drop(u.index[:(period-1)])
     d[d.index[period-1]] = np.mean( d[:period] ) #first value is sum of avg losses
     d = d.drop(d.index[:(period-1)])
-    rs = pd.stats.moments.ewma(u, com=period-1, adjust=False) / \
-    pd.stats.moments.ewma(d, com=period-1, adjust=False)
+    rs = pd.stats.moments.ewma(u, com=period-1, adjust=False) / pd.stats.moments.ewma(d, com=period-1, adjust=False)
     df = pd.DataFrame(100 - 100 / (1 + rs))
 
     # slice first period dates, create series with 50 as value, per date. then concat.
     prefixed_values = pd.Series(50, index=series.index.values[0:period])
     return pd.concat([prefixed_values, df.ix[:, 0]])
 
+def ta_RSI(series, period):
+    rsi_series = rsi(series, window=period, fillna=True)
+    return rsi_series
 
-def MACD(df, fast_ma=26, slow_ma=12, signal_period=9):
-    df['30 mavg'] = pd.rolling_mean(df['Close'], 30)
-    df['26 ema'] = pd.ewma(df['Close'], span=fast_ma)
-    df['12 ema'] = pd.ewma(df['Close'], span=slow_ma)
-    df['MACD'] = (df['12 ema'] - df['26 ema'])
-    df['Signal'] = pd.ewma(df['MACD'], span=signal_period)
-    df['Crossover'] = df['MACD'] - df['Signal']
-    return df
+
+# def MACD(df, fast_ma=26, slow_ma=12, signal_period=9):
+#     df['30 mavg'] = pd.rolling_mean(df['Close'], 30)
+#     df['26 ema'] = pd.ewma(df['Close'], span=fast_ma)
+#     df['12 ema'] = pd.ewma(df['Close'], span=slow_ma)
+#     df['MACD'] = (df['12 ema'] - df['26 ema'])
+#     df['Signal'] = pd.ewma(df['MACD'], span=signal_period)
+#     df['Crossover'] = df['MACD'] - df['Signal']
+#     return df
 
 
 # to be tested...
@@ -165,24 +211,58 @@ def Williams_percent_r(df):
 
 
 # ---------------------------------------------
+def normalize_series(series: pd.Series):
+    if pd.isna(series.iloc[0]):
+        for i, v in series.items():
+            first_value = 100
+            if v > 0:
+                first_value = v
+                break
+            else:
+                series.at[i] = 0
+    else:
+        first_value = series.iloc[0]
+    multiplication_factor = ((100 - first_value) / first_value) + 1
+    return series*multiplication_factor
 
 
 def accumulated_close(df):
     # requires a column Stance, and Adj close
-
+    df = df.reset_index(drop=True)
+    df['Norm Close'] = normalize_series(df['Adj Close'])
+    df['Accumulated Close'] = 100
     pointer = df.iloc[0]   #first date as index.
     booked_profit = 0.00
+    trade = Trade()
+    trades = df['Norm Close']*0
 
     for index, row in df.iterrows():
+        if index == 0:
+            continue
         if row['Stance'] > 0:
-            df.loc[index, 'Accumulated Close'] = df.loc[index, 'Adj Close'] + booked_profit
-            pointer = index
+            if trade.active:
+                df.loc[index, 'Accumulated Close'] = df.loc[index-1, 'Accumulated Close'] + (df.loc[index, 'Norm Close'] - df.loc[index-1, 'Norm Close'])
+                # df.loc[index, 'Accumulated Close'] = df.loc[index-1, 'Accumulated Close']
+            else:
+                trade.buy = row['Norm Close']
+                df.loc[index, 'Accumulated Close'] = df.loc[index - 1, 'Accumulated Close']
+                trades[index] = 50
+                # pointer = index
             # print 'Buy and hold'
         elif row['Stance'] < 0:
-            df.loc[index, 'Accumulated Close'] = df.loc[pointer, 'Accumulated Close']
-            booked_profit = df.loc[pointer, 'Accumulated Close'] - df.loc[index, 'Adj Close']
+            if trade.active:
+                trade.sell = row['Norm Close']
+                booked_profit = trade.get_pnl()
+                trade.close_trade()
+                df.loc[index, 'Accumulated Close'] = df.loc[index - 1, 'Accumulated Close'] + (df.loc[index, 'Norm Close'] - df.loc[index-1, 'Norm Close'])
+                trades[index] = -50
+                # df.loc[index, 'Accumulated Close'] = df.loc[index - 1, 'Accumulated Close'] + booked_profit
+            else:
+                df.loc[index, 'Accumulated Close'] = df.loc[index - 1, 'Accumulated Close']
+
             # print 'Sell and hold'
         else:
-            df.loc[index, 'Accumulated Close'] = df.loc[index, 'Adj Close']
+            df.loc[index, 'Accumulated Close'] = df.loc[index-1, 'Accumulated Close']
             # print 'Waiting...'
 
+    return df
